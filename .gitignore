@@ -1,0 +1,23 @@
+# Build output
+/bin/
+
+# FIX state written by a local (non-Docker) run
+/store/
+/logs/
+/data/
+
+# Secrets. Passwords live in the environment; never in a committed file.
+.env
+*.env
+
+# Editor and agent tooling — not part of this project
+.idea/
+.junie/
+.vscode/
+.claude/
+.agents/
+.mcp.json
+skills-lock.json
+
+# OS
+.DS_Store

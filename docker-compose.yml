@@ -1,0 +1,44 @@
+# Three services: the fake venue and its two clients.
+#
+# Each gets its own store volume. Sequence numbers must survive a container
+# restart — restarting a client and watching it recover a gap is the whole
+# shape of drill 07, and a store that resets on restart would silently make the
+# gap disappear instead.
+
+services:
+  exchange:
+    build: .
+    command: ["exchange", "-config", "config/exchange.cfg", "-admin", ":8081"]
+    ports:
+      - "9876:9876"   # FIX
+      - "8081:8081"   # admin control plane
+    environment:
+      FIXLAB_OECLIENT_PASSWORD: ${FIXLAB_OECLIENT_PASSWORD:-oe-secret}
+      FIXLAB_DCCLIENT_PASSWORD: ${FIXLAB_DCCLIENT_PASSWORD:-dc-secret}
+    volumes:
+      - exchange-store:/data/store
+
+  oe-client:
+    build: .
+    command: ["oe-client", "-config", "config/oe-client.cfg", "-host", "exchange", "-every", "10s"]
+    depends_on:
+      - exchange
+    environment:
+      FIXLAB_OECLIENT_PASSWORD: ${FIXLAB_OECLIENT_PASSWORD:-oe-secret}
+    volumes:
+      - oe-client-store:/data/store
+
+  dc-client:
+    build: .
+    command: ["dc-client", "-config", "config/dc-client.cfg", "-host", "exchange"]
+    depends_on:
+      - exchange
+    environment:
+      FIXLAB_DCCLIENT_PASSWORD: ${FIXLAB_DCCLIENT_PASSWORD:-dc-secret}
+    volumes:
+      - dc-client-store:/data/store
+
+volumes:
+  exchange-store:
+  oe-client-store:
+  dc-client-store:
