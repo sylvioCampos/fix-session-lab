@@ -15,8 +15,9 @@ Here you learn them with `curl`.
 Modeled on **B3 EntryPoint**, using [quickfixgo/quickfix][qfgo]. Everything is
 generic FIX 4.4 except a handful of clearly marked venue-specific tags.
 
-> **Status: work in progress.** Drills 01, 04 and 05 are implemented and tested.
-> The rest are listed below and are being added. See [Roadmap](#roadmap).
+> **Status: work in progress.** Six of the eleven drills are implemented and
+> tested, including the sequence-gap recovery drill this repo is really for.
+> The rest are listed below. See [Roadmap](#roadmap).
 
 [qfgo]: https://github.com/quickfixgo/quickfix
 
@@ -70,11 +71,11 @@ understand.
 |---|-------|---------|
 | [01](docs/drills/01-first-logon.md) | First logon | `RawData` auth, `Text` on Logon, why the password must never hit a log |
 | 02 | Heartbeat & TestRequest | what "alive" means, and what it does not prove |
-| 03 | Rejected logon | how a venue refuses you, and how that looks from inside a reconnect loop |
+| [03](docs/drills/03-rejected-logon.md) | Rejected logon | how a venue refuses you, and why that is hard to diagnose |
 | [04](docs/drills/04-order-round-trip.md) | Order round trip | `ExecType` vs `OrdStatus`, cumulative vs incremental fields |
 | [05](docs/drills/05-dropcopy-fanout-dedup.md) | Drop-copy fanout & dedup | why `ExecID` is the field everything hangs on |
-| 06 | Sequence persistence | `ResetOnLogon` Y vs N, and what a store is actually for |
-| 07 | Gap & ResendRequest | recovering a gap, and surviving `PossDupFlag=Y` |
+| [06](docs/drills/06-seqnum-persistence.md) | Sequence persistence | `ResetOnLogon` Y vs N, and what a store is actually for |
+| [07](docs/drills/07-gap-and-resend.md) | **Gap & ResendRequest** | recovering a gap, and surviving `PossDupFlag=Y` |
 | 08 | SequenceReset / GapFill | why admin messages are not replayed |
 | 09 | Silent session & watchdog | the failure no FIX engine will detect for you |
 | 10 | Cancel on disconnect | `35002`/`35003`, and why the timeout window exists |
@@ -100,6 +101,25 @@ POST /admin/reject-logon?reason=&on=              refuse the next logon
 
 Every drill test drives these same methods, so what the docs describe is what CI
 asserts.
+
+## Tests
+
+```bash
+go test ./...                 # every drill
+go test ./... -update         # rewrite the golden wire traces
+FIXLAB_DUMP_WIRE=1 go test ./... -v -run TestDrill07   # print a full trace
+```
+
+Each drill has an integration test that stands up a real acceptor, real
+initiator sessions, and real FIX over loopback. Drill 07 additionally asserts
+its wire trace byte for byte against a committed golden file, with only the
+volatile fields removed — `9`, `10`, `52`, `60`, `122`. Sequence numbers and
+`PossDupFlag` are asserted, since a recovery test that ignored them would be
+asserting nothing.
+
+That is the guarantee: the trace printed in `docs/drills/07` is the trace CI
+checks. If the code stops emitting it, the build goes red rather than the
+documentation quietly going stale.
 
 ## Notes on quickfixgo
 
@@ -149,9 +169,12 @@ does.
 
 ## Roadmap
 
-Drills 01, 04 and 05 work today. Next: sequence persistence (06) and the gap
-recovery drill (07), which is the one this repo is really for. Then the
-remaining session behaviors.
+Drills 01, 03, 04, 05, 06 and 07 work today. Remaining: heartbeats and
+TestRequest (02), SequenceReset/GapFill (08), the silent-session watchdog (09),
+cancel-on-disconnect (10), and session-level Reject (11).
+
+The admin endpoints those drills need are already implemented — `/silence`,
+`/gap`, `/cancel-all` — they just have no drill or documentation yet.
 
 ## Credentials
 

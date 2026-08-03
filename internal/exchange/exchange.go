@@ -29,9 +29,6 @@ const (
 
 	// SettingKind is the settings key naming a session's role.
 	SettingKind = "SessionKind"
-	// SettingPassword is the settings key naming the env var holding the
-	// password this acceptor expects. Empty means any password is accepted.
-	SettingExpectPassword = "ExpectPassword"
 )
 
 // App implements quickfix.Application for both acceptor sessions.
@@ -43,6 +40,11 @@ type App struct {
 	loggedOn map[quickfix.SessionID]bool
 	cod      map[quickfix.SessionID]session.LogonRequest
 	seqnums  map[quickfix.SessionID]SeqNums
+
+	// expect holds the password the venue requires from each counterparty,
+	// captured at startup. A CompID absent from this map authenticates with
+	// anything, so a first run works before the reader has configured a thing.
+	expect map[string]string
 
 	// rejectLogons, when set, makes the next Logon fail with this reason.
 	// Drill 03 uses it; the admin API sets it.
@@ -70,6 +72,7 @@ func New(book *Book, log Logger) *App {
 		loggedOn: make(map[quickfix.SessionID]bool),
 		cod:      make(map[quickfix.SessionID]session.LogonRequest),
 		seqnums:  make(map[quickfix.SessionID]SeqNums),
+		expect:   make(map[string]string),
 		log:      log,
 	}
 }
@@ -123,7 +126,13 @@ func (a *App) RegisterKind(sessionID quickfix.SessionID, kind Kind) {
 	a.kinds[sessionID] = kind
 }
 
-// LoadKinds reads SessionKind for every configured session.
+// LoadKinds reads each configured session's role and the credential it expects.
+//
+// Credentials are captured once, at startup, rather than read from the
+// environment on every Logon. A venue's view of what a counterparty's password
+// should be is not supposed to change underneath a running session, and
+// re-reading it per handshake would mean an operator editing the environment
+// could silently start accepting a different password.
 func (a *App) LoadKinds(settings *quickfix.Settings) error {
 	for sessionID, s := range settings.SessionSettings() {
 		raw, err := s.Setting(SettingKind)
@@ -137,6 +146,13 @@ func (a *App) LoadKinds(settings *quickfix.Settings) error {
 				sessionID, SettingKind, raw, KindOrderEntry, KindDropCopy)
 		}
 		a.RegisterKind(sessionID, kind)
+
+		// The counterparty's CompID is this session's target.
+		if pw, err := session.Password(sessionID.TargetCompID); err == nil {
+			a.mu.Lock()
+			a.expect[sessionID.TargetCompID] = pw
+			a.mu.Unlock()
+		}
 	}
 	return nil
 }
@@ -147,15 +163,17 @@ func (a *App) kindOf(sessionID quickfix.SessionID) Kind {
 	return a.kinds[sessionID]
 }
 
-// sessionOf returns the SessionID currently serving a role, and whether it is
-// logged on.
+// sessionOf returns the SessionID configured for a role, and whether one is
+// configured at all. It deliberately says nothing about whether the session is
+// connected — see publish for why the venue keeps sending to a session that is
+// down.
 func (a *App) sessionOf(kind Kind) (quickfix.SessionID, bool) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
 	for id, k := range a.kinds {
 		if k == kind {
-			return id, a.loggedOn[id]
+			return id, true
 		}
 	}
 	return quickfix.SessionID{}, false
@@ -267,11 +285,14 @@ func (a *App) FromApp(msg *quickfix.Message, sessionID quickfix.SessionID) quick
 }
 
 func (a *App) checkPassword(sessionID quickfix.SessionID, got string) error {
-	expected, err := session.Password(sessionID.TargetCompID)
-	if err != nil {
-		// No credential configured for this counterparty: accept anything.
-		// A real venue would refuse; the lab defaults to permissive so a
-		// first run works before the reader has set any env vars.
+	a.mu.RLock()
+	expected, configured := a.expect[sessionID.TargetCompID]
+	a.mu.RUnlock()
+
+	if !configured {
+		// No credential configured for this counterparty: accept anything. A
+		// real venue would refuse; the lab defaults to permissive so a first
+		// run works before the reader has set any environment variables.
 		return nil
 	}
 	if got != expected {

@@ -53,10 +53,21 @@ func (a *App) publish(r report) {
 		return
 	}
 
-	if oeID, up := a.sessionOf(KindOrderEntry); up {
+	// Published to every configured session whether or not it is connected.
+	//
+	// That is not an oversight. A venue does not stop trading because a client
+	// dropped, and the report still has to exist. quickfixgo assigns the
+	// sequence number and writes the message to the store before it ever
+	// touches a socket; if the session is down the bytes are discarded from the
+	// send queue but the stored copy remains. The client's sequence number is
+	// now behind, and on reconnect it asks for the range it missed — which is
+	// exactly how a real gap forms and how it is recovered. Skipping the
+	// publish would leave the numbering contiguous and there would be nothing
+	// to recover. Drill 07.
+	if oeID, ok := a.sessionOf(KindOrderEntry); ok {
 		a.send(r, oeID)
 	}
-	if dcID, up := a.sessionOf(KindDropCopy); up {
+	if dcID, ok := a.sessionOf(KindDropCopy); ok {
 		a.send(r, dcID)
 	}
 }

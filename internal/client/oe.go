@@ -28,9 +28,10 @@ const tagPossDupFlag quickfix.Tag = 43
 type OrderEntry struct {
 	*session.Client
 
-	mu     sync.Mutex
-	seq    int
-	orders map[string]OrderView
+	mu      sync.Mutex
+	seq     int
+	orders  map[string]OrderView
+	replays int
 }
 
 // OrderView is the client's own record of an order, built entirely from the
@@ -121,6 +122,9 @@ func (c *OrderEntry) onExecutionReport(er executionreport.ExecutionReport) quick
 		AvgPx:      avgPx,
 		LastExecID: execID,
 	}
+	if replayed {
+		c.replays++
+	}
 	c.mu.Unlock()
 
 	c.Log.Printf("ER %-8s execType=%s ordStatus=%s cum=%s leaves=%s%s",
@@ -172,6 +176,17 @@ func (c *OrderEntry) Send(sessionID quickfix.SessionID, o NewOrder) (string, err
 
 	c.Log.Printf("sent %s: %s %s %s @ %s", clOrdID, o.Side, o.OrderQty, o.Symbol, o.Price)
 	return clOrdID, nil
+}
+
+// ReplayCount is how many reports arrived carrying PossDupFlag=Y.
+//
+// Worth exposing rather than merely logging: after a recovery it is the only
+// evidence that a replay actually happened. A recovery test that passes with a
+// replay count of zero has proved nothing.
+func (c *OrderEntry) ReplayCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.replays
 }
 
 // Order returns the client's view of an order.
