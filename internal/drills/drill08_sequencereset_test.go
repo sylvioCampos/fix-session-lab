@@ -90,7 +90,7 @@ func TestDrill08_PureGapFill(t *testing.T) {
 // housekeeping standing in for messages that were never delivered, so it is
 // flagged as a duplicate even though the receiver has certainly not seen it
 // before. A client that treats 43=Y as "ignore this" will ignore the very
-// message telling it where to resume, and then never resynchronise.
+// message telling it where to resume, and then never resynchronize.
 func TestDrill08_GapFillCarriesPossDupFlag(t *testing.T) {
 	lab := startLab(t,
 		withFileStore(t.TempDir()),
