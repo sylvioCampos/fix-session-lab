@@ -142,7 +142,7 @@ jobs:
           count=$(grep -c '35=3' dc.log || true)
           if [ "$count" != "0" ]; then
             echo "::error::the drop-copy session emitted ${count} reject(s); it must be read-only"
-            grep '35=3' dc.log | head
+            grep -m 20 '35=3' dc.log || true
             exit 1
           fi
 
@@ -186,7 +186,7 @@ jobs:
           rejects=$(grep -c '35=j' oe.log || true)
           if [ "$rejects" != "0" ]; then
             echo "::error::${rejects} business reject(s) after restart — duplicate ClOrdIDs are back"
-            grep '35=j' oe.log | head
+            grep -m 20 '35=j' oe.log || true
             exit 1
           fi
 
