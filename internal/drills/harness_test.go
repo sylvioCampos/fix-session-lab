@@ -53,6 +53,22 @@ type config struct {
 	// withDropCopy starts the drop-copy client. Drills that only exercise the
 	// order-entry session leave it off to keep the wire trace readable.
 	withDropCopy bool
+
+	// heartBtInt in seconds. The default of 30 keeps heartbeats out of every
+	// other drill's trace; drill 02 turns it down to make them observable.
+	heartBtInt int
+
+	// proxy routes the order-entry client through a relay whose delivery can
+	// be frozen, for failures that cannot be produced from an Application.
+	proxy bool
+
+	// codType and codWindow arm cancel-on-disconnect on the order-entry Logon.
+	codType   int
+	codWindow int
+
+	// watchdog, when non-zero, runs an inbound-application-traffic watchdog on
+	// the order-entry client with this timeout.
+	watchdog time.Duration
 }
 
 type option func(*config)
@@ -60,6 +76,14 @@ type option func(*config)
 func withFileStore(dir string) option  { return func(c *config) { c.storeDir = dir } }
 func withResetOnLogon(v string) option { return func(c *config) { c.resetOnLogon = v } }
 func withoutDropCopy() option          { return func(c *config) { c.withDropCopy = false } }
+func withHeartBtInt(secs int) option   { return func(c *config) { c.heartBtInt = secs } }
+func withProxy() option                { return func(c *config) { c.proxy = true } }
+func withWatchdog(d time.Duration) option {
+	return func(c *config) { c.watchdog = d }
+}
+func withCOD(codType, windowMS int) option {
+	return func(c *config) { c.codType, c.codWindow = codType, windowMS }
+}
 
 // lab is a running stack: one exchange with both acceptor sessions, an
 // order-entry client, and optionally a drop-copy client.
@@ -75,19 +99,25 @@ type lab struct {
 	// Wire captures every byte every session logged, redacted.
 	Wire *wireCapture
 
+	// Proxy is non-nil when the order-entry client connects through a relay.
+	Proxy *proxy
+
+	// Watchdog is non-nil when one is configured.
+	Watchdog *session.Watchdog
+
 	cfg      config
 	port     int
 	logger   *log.Logger
 	acceptor *quickfix.Acceptor
 
-	oeInitiator *quickfix.Initiator
+	oe          *session.Supervisor
 	dcInitiator *quickfix.Initiator
 }
 
 func startLab(t *testing.T, opts ...option) *lab {
 	t.Helper()
 
-	cfg := config{resetOnLogon: "Y", withDropCopy: true}
+	cfg := config{resetOnLogon: "Y", withDropCopy: true, heartBtInt: 30}
 	for _, o := range opts {
 		o(&cfg)
 	}
@@ -126,6 +156,10 @@ func startLab(t *testing.T, opts ...option) *lab {
 		}
 	})
 
+	if cfg.proxy {
+		l.Proxy = startProxy(t, l.port)
+	}
+
 	l.StartOE(t)
 	if cfg.withDropCopy {
 		l.startDC(t)
@@ -153,34 +187,50 @@ func (l *lab) StartOE(t *testing.T) {
 	t.Helper()
 
 	settings := parseSettings(t, l.clientSettings(oeCompID))
-
-	// A fresh application on reconnect, deliberately. A real client restarting
-	// its process loses in-memory order state and rebuilds it from what the
-	// venue replays — which is exactly what drill 07 is checking.
-	l.OE = client.NewOrderEntry(session.LogonCredentials{AppID: "fixlab-oe/test"}, l.logger)
-
-	init, err := quickfix.NewInitiator(
-		l.OE, l.storeFactory(settings), settings, fixlog.NewFactory(l.Wire))
-	if err != nil {
-		t.Fatalf("new order-entry initiator: %v", err)
-	}
-	if err := init.Start(); err != nil {
-		t.Fatalf("start order-entry initiator: %v", err)
-	}
-	l.oeInitiator = init
-
 	l.OESessionID = soleSession(t, settings)
+
+	// A fresh application every time, deliberately. A client that restarts
+	// loses its in-memory order state and rebuilds it from what the venue
+	// replays, which is exactly what drill 07 checks.
+	build := func() (*quickfix.Initiator, error) {
+		l.OE = client.NewOrderEntry(session.LogonCredentials{
+			AppID:            "fixlab-oe/test",
+			CODType:          l.cfg.codType,
+			CODTimeoutWindow: l.cfg.codWindow,
+		}, l.logger)
+
+		if l.Watchdog != nil {
+			session.WatchClient(l.OE.Client, l.Watchdog)
+		}
+		return quickfix.NewInitiator(
+			l.OE, l.storeFactory(settings), settings, fixlog.NewFactory(l.Wire))
+	}
+
+	l.oe = &session.Supervisor{Build: build, Log: l.logger}
+
+	if l.cfg.watchdog > 0 && l.Watchdog == nil {
+		l.Watchdog = &session.Watchdog{
+			Timeout:  l.cfg.watchdog,
+			Interval: l.cfg.watchdog / 4,
+			Restart:  l.oe.Restart,
+			Log:      l.logger,
+		}
+		t.Cleanup(l.Watchdog.Stop)
+	}
+
+	if err := l.oe.Start(); err != nil {
+		t.Fatalf("start order-entry client: %v", err)
+	}
 }
 
 // StopOE disconnects the order-entry client and waits for the venue to notice.
 func (l *lab) StopOE(t *testing.T) {
 	t.Helper()
 
-	if l.oeInitiator == nil {
+	if l.oe == nil {
 		return
 	}
-	l.oeInitiator.Stop()
-	l.oeInitiator = nil
+	l.oe.Stop()
 
 	waitFor(t, 5*time.Second, "the venue to see the order-entry session drop", func() bool {
 		for _, s := range l.Exchange.Sessions() {
@@ -211,9 +261,22 @@ func (l *lab) startDC(t *testing.T) {
 	l.DCSessionID = soleSession(t, settings)
 }
 
+// OESupervisorStarts is how many Initiators the order-entry client has built,
+// including the first. A forced reconnect must increase it, since that is the
+// only way quickfixgo lets a single session be recycled.
+func (l *lab) OESupervisorStarts() int {
+	if l.oe == nil {
+		return 0
+	}
+	return l.oe.Starts()
+}
+
 func (l *lab) stop() {
-	if l.oeInitiator != nil {
-		l.oeInitiator.Stop()
+	if l.Watchdog != nil {
+		l.Watchdog.Stop()
+	}
+	if l.oe != nil {
+		l.oe.Stop()
 	}
 	if l.dcInitiator != nil {
 		l.dcInitiator.Stop()
@@ -308,7 +371,7 @@ SocketAcceptHost=127.0.0.1
 StartTime=00:00:00
 EndTime=00:00:00
 NonStopSession=Y
-HeartBtInt=30
+HeartBtInt=%d
 ResetOnLogon=N
 UseDataDictionary=Y
 DataDictionary=../../spec/FIX44-fixlab.xml
@@ -324,10 +387,18 @@ SessionKind=ORDER_ENTRY
 SenderCompID=%s
 TargetCompID=%s
 SessionKind=DROP_COPY
-`, l.port, l.storeLine("exchange"), exchangeCompID, oeCompID, exchangeCompID, dcCompID)
+`, l.port, l.cfg.heartBtInt, l.storeLine("exchange"), exchangeCompID, oeCompID, exchangeCompID, dcCompID)
 }
 
 func (l *lab) clientSettings(compID string) string {
+	// The order-entry client goes through the proxy when one is configured;
+	// the drop-copy client always talks to the venue directly, so a frozen
+	// wire on one session leaves the other observably healthy.
+	port := l.port
+	if l.Proxy != nil && compID == oeCompID {
+		port = l.Proxy.Port()
+	}
+
 	return fmt.Sprintf(`
 [default]
 ConnectionType=initiator
@@ -335,7 +406,7 @@ BeginString=FIX.4.4
 SocketConnectHost=127.0.0.1
 SocketConnectPort=%d
 ReconnectInterval=1
-HeartBtInt=30
+HeartBtInt=%d
 StartTime=00:00:00
 EndTime=00:00:00
 NonStopSession=Y
@@ -343,6 +414,7 @@ ResetOnLogon=%s
 UseDataDictionary=Y
 DataDictionary=../../spec/FIX44-fixlab.xml
 ValidateUserDefinedFields=Y
+%s
 PersistMessages=Y
 LogoutTimeout=1
 CheckLatency=N
@@ -351,7 +423,27 @@ MaxMessagesInResendRequest=10000
 [session]
 SenderCompID=%s
 TargetCompID=%s
-`, l.port, l.cfg.resetOnLogon, l.storeLine(compID), compID, exchangeCompID)
+`, port, l.cfg.heartBtInt, l.cfg.resetOnLogon, rejectInvalid(compID),
+		l.storeLine(compID), compID, exchangeCompID)
+}
+
+// rejectInvalid mirrors the committed configs: an order-entry session answers
+// an invalid message with a session Reject, a drop-copy session must not.
+//
+// A drop-copy session sends only session-level admin traffic. With
+// RejectInvalidMessage=Y, quickfixgo answers anything failing dictionary
+// validation with a 35=3, breaking that invariant the moment a venue emits a
+// value the dictionary does not know — which venues do.
+//
+// The harness originally left this at the default for both sessions, so it did
+// not match config/dc-client.cfg. That mismatch is how the problem was found:
+// a cancel-on-disconnect report carrying ExecRestatementReason=100 failed
+// validation and the drop-copy client answered with a Reject. Drill 11.
+func rejectInvalid(compID string) string {
+	if compID == dcCompID {
+		return "RejectInvalidMessage=N"
+	}
+	return "RejectInvalidMessage=Y"
 }
 
 // testWriter routes log output through t.Log so it only surfaces on failure.

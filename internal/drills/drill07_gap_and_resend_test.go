@@ -1,6 +1,7 @@
 package drills
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -96,11 +97,29 @@ func TestDrill07_GapAndResend(t *testing.T) {
 			"so this test proved nothing about recovery")
 	}
 
+	// Recovery is not finished when the last ExecutionReport lands. The venue
+	// still owes a SequenceReset-GapFill for the administrative message that
+	// occupied the final slot in the range, and it arrives a moment later.
+	// Asserting the trace before that would be asserting a half-finished
+	// recovery — and would make this test flaky, which for the flagship drill
+	// is worse than useless.
+	//
+	// The condition is checked against the client's own view, not the whole
+	// capture. Every session writes to one buffer, so the venue logs the
+	// GapFill on its side before the client has received it — waiting on the
+	// raw capture would let the assertion run a beat too early and reintroduce
+	// exactly the flake it is meant to remove.
+	clientView := func() string {
+		return normalizeWire(lab.Wire.String(), "FIX.4.4:OECLIENT->FIXLABEX")
+	}
+	waitFor(t, 5*time.Second, "the client to receive the SequenceReset-GapFill", func() bool {
+		return strings.Contains(clientView(), "35=4")
+	})
+
 	// The wire itself is the lesson here, so it is asserted byte for byte
 	// (minus timestamps and derived lengths). If the trace printed in
 	// docs/drills/07 ever stops matching what the code emits, this fails.
-	assertGolden(t, "07-gap-and-resend.golden",
-		normalizeWire(lab.Wire.String(), "FIX.4.4:OECLIENT->FIXLABEX"))
+	assertGolden(t, "07-gap-and-resend.golden", clientView())
 }
 
 // TestDrill07_ReplayIsIdempotent is the assertion that matters most and the one

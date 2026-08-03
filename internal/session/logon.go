@@ -66,14 +66,13 @@ type LogonCredentials struct {
 // which is how B3 EntryPoint authenticates — not Username/Password (553/554).
 // Populating 553/554 against such a venue is harmless but has no effect, and is
 // a common first-integration mistake precisely because it is silent.
+// A missing password suppresses only the credential fields. Everything else on
+// the Logon — the application identifier, the cancel-on-disconnect arming — is
+// unrelated to authentication, and dropping it too would turn one
+// misconfiguration into several. Silently failing to arm cancel-on-disconnect
+// is a particularly bad way to lose an argument with a venue: your orders are
+// unprotected and nothing anywhere says so.
 func InjectLogon(msg *quickfix.Message, sessionID quickfix.SessionID, creds LogonCredentials) error {
-	pw, err := Password(sessionID.SenderCompID)
-	if err != nil {
-		return err
-	}
-
-	msg.Body.SetField(tag.RawDataLength, quickfix.FIXInt(len(pw)))
-	msg.Body.SetField(tag.RawData, quickfix.FIXString(pw))
 	msg.Body.SetField(tag.Text, quickfix.FIXString(creds.AppID))
 	// 98=0 (None). FIX-level encryption is not used; transport security, when
 	// a venue requires it, is TLS underneath the session.
@@ -83,6 +82,14 @@ func InjectLogon(msg *quickfix.Message, sessionID quickfix.SessionID, creds Logo
 		msg.Body.SetField(TagCODType, quickfix.FIXInt(creds.CODType))
 		msg.Body.SetField(TagCODTimeoutWindow, quickfix.FIXInt(creds.CODTimeoutWindow))
 	}
+
+	pw, err := Password(sessionID.SenderCompID)
+	if err != nil {
+		return err
+	}
+
+	msg.Body.SetField(tag.RawDataLength, quickfix.FIXInt(len(pw)))
+	msg.Body.SetField(tag.RawData, quickfix.FIXString(pw))
 
 	return nil
 }

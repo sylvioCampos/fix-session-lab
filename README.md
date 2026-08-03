@@ -15,10 +15,6 @@ Here you learn them with `curl`.
 Modeled on **B3 EntryPoint**, using [quickfixgo/quickfix][qfgo]. Everything is
 generic FIX 4.4 except a handful of clearly marked venue-specific tags.
 
-> **Status: work in progress.** Six of the eleven drills are implemented and
-> tested, including the sequence-gap recovery drill this repo is really for.
-> The rest are listed below. See [Roadmap](#roadmap).
-
 [qfgo]: https://github.com/quickfixgo/quickfix
 
 ## Quickstart
@@ -70,16 +66,16 @@ understand.
 | # | Drill | Teaches |
 |---|-------|---------|
 | [01](docs/drills/01-first-logon.md) | First logon | `RawData` auth, `Text` on Logon, why the password must never hit a log |
-| 02 | Heartbeat & TestRequest | what "alive" means, and what it does not prove |
+| [02](docs/drills/02-heartbeat-testrequest.md) | Heartbeat & TestRequest | what "alive" proves, and what it does not |
 | [03](docs/drills/03-rejected-logon.md) | Rejected logon | how a venue refuses you, and why that is hard to diagnose |
 | [04](docs/drills/04-order-round-trip.md) | Order round trip | `ExecType` vs `OrdStatus`, cumulative vs incremental fields |
 | [05](docs/drills/05-dropcopy-fanout-dedup.md) | Drop-copy fanout & dedup | why `ExecID` is the field everything hangs on |
 | [06](docs/drills/06-seqnum-persistence.md) | Sequence persistence | `ResetOnLogon` Y vs N, and what a store is actually for |
 | [07](docs/drills/07-gap-and-resend.md) | **Gap & ResendRequest** | recovering a gap, and surviving `PossDupFlag=Y` |
-| 08 | SequenceReset / GapFill | why admin messages are not replayed |
-| 09 | Silent session & watchdog | the failure no FIX engine will detect for you |
-| 10 | Cancel on disconnect | `35002`/`35003`, and why the timeout window exists |
-| 11 | Session-level Reject | `35=3`, and when you must not send one |
+| [08](docs/drills/08-sequencereset-gapfill.md) | SequenceReset / GapFill | why admin messages are not replayed |
+| [09](docs/drills/09-silent-session-watchdog.md) | **Silent session & watchdog** | the failure no FIX engine will detect for you |
+| [10](docs/drills/10-cancel-on-disconnect.md) | Cancel on disconnect | `35002`/`35003`, and why the timeout window exists |
+| [11](docs/drills/11-session-reject.md) | Session-level Reject | `35=3` vs `35=j`, and when you must not send either |
 
 ## The admin API
 
@@ -142,7 +138,15 @@ Things worth knowing before you build on it, all verified against v0.9.10:
   instead — see `SeqNums` in `internal/exchange`.
 
 - **`ToAdmin` cannot fail.** It returns nothing, so a missing credential cannot
-  abort an outbound Logon. Log it and let the venue's rejection tell you.
+  abort an outbound Logon. Log it and let the venue's rejection tell you — and
+  do not let one missing field suppress the rest of the Logon, or you will
+  silently fail to arm cancel-on-disconnect too.
+
+- **Rejects split in a place you would not guess.** An out-of-range tag value on
+  an application message produces a session Reject (`35=3`); a *missing
+  conditionally-required field* on the same message produces a Business Message
+  Reject (`35=j`). Same validation pass, different layer — decided by the reject
+  reason. Drill 11.
 
 - **Returning `quickfix.RejectLogon{Text: …}` from `FromAdmin`** is how an
   acceptor refuses a Logon. quickfixgo replies with a Logout carrying the reason,
@@ -156,7 +160,7 @@ cmd/oe-client     order-entry initiator
 cmd/dc-client     drop-copy initiator
 internal/exchange venue behavior: order state, ER fanout, commanded actions
 internal/client   the two initiator applications
-internal/session  shared: logon, credentials, settings
+internal/session  shared: logon, credentials, watchdog, supervisor
 internal/fixlog   redacting log factory
 internal/drills   the tests behind docs/drills
 spec/             the data dictionary, and what was changed in it
@@ -166,15 +170,6 @@ config/           quickfix settings, one per binary
 Everything is under `internal/`. This is a reference, not a library — copy what
 you need. No API stability is promised, and the code will change as quickfixgo
 does.
-
-## Roadmap
-
-Drills 01, 03, 04, 05, 06 and 07 work today. Remaining: heartbeats and
-TestRequest (02), SequenceReset/GapFill (08), the silent-session watchdog (09),
-cancel-on-disconnect (10), and session-level Reject (11).
-
-The admin endpoints those drills need are already implemented — `/silence`,
-`/gap`, `/cancel-all` — they just have no drill or documentation yet.
 
 ## Credentials
 

@@ -5356,6 +5356,7 @@
    <value enum='Y' description='YES' />
   </field>
   <field number='378' name='ExecRestatementReason' type='INT'>
+   <value enum='100' description='CANCEL_ON_DISCONNECT' />
    <value enum='0' description='GTCORPACT' />
    <value enum='1' description='GTRENEW' />
    <value enum='10' description='WAREHOUSERECAP' />

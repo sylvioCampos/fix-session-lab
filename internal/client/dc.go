@@ -45,7 +45,7 @@ func NewDropCopy(creds session.LogonCredentials, logger *log.Logger) *DropCopy {
 
 // FromApp records execution reports, discarding ones already seen.
 func (c *DropCopy) FromApp(msg *quickfix.Message, sessionID quickfix.SessionID) quickfix.MessageRejectError {
-	c.NoteInbound(sessionID)
+	c.NoteInbound(sessionID, session.InboundApp)
 
 	msgType, err := msg.Header.GetString(quickfix.Tag(35))
 	if err != nil {

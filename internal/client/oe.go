@@ -59,7 +59,7 @@ func NewOrderEntry(creds session.LogonCredentials, logger *log.Logger) *OrderEnt
 // execution reports; anything else is unexpected and is rejected rather than
 // ignored, so a venue sending something this client cannot handle finds out.
 func (c *OrderEntry) FromApp(msg *quickfix.Message, sessionID quickfix.SessionID) quickfix.MessageRejectError {
-	c.NoteInbound(sessionID)
+	c.NoteInbound(sessionID, session.InboundApp)
 
 	msgType, err := msg.Header.GetString(quickfix.Tag(35))
 	if err != nil {

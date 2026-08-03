@@ -18,7 +18,32 @@ type Client struct {
 
 	mu        sync.RWMutex
 	loggedOn  map[quickfix.SessionID]bool
-	onInbound []func(quickfix.SessionID)
+	onInbound []func(quickfix.SessionID, InboundClass)
+}
+
+// InboundClass distinguishes the two kinds of inbound traffic, because for
+// liveness they mean completely different things.
+//
+// An admin message proves the socket is open and the engine on the other side
+// is running. It proves nothing about whether the venue is still producing
+// business data. A session can sit exchanging heartbeats indefinitely while
+// delivering nothing, and every FIX engine will report it as healthy, because
+// by the protocol's own definition it is.
+type InboundClass int
+
+const (
+	// InboundAdmin is session-level traffic: Logon, Heartbeat, TestRequest,
+	// ResendRequest, Reject, Logout.
+	InboundAdmin InboundClass = iota
+	// InboundApp is business traffic — the thing you actually connected for.
+	InboundApp
+)
+
+func (c InboundClass) String() string {
+	if c == InboundApp {
+		return "app"
+	}
+	return "admin"
 }
 
 func NewClient(creds LogonCredentials, logger *log.Logger) *Client {
@@ -29,29 +54,25 @@ func NewClient(creds LogonCredentials, logger *log.Logger) *Client {
 	}
 }
 
-// OnInbound registers a callback fired on every inbound message, admin or
-// application. The watchdog uses it as its liveness signal.
-//
-// Whether admin messages should count is the whole question. A heartbeat proves
-// the socket and the engine are alive but says nothing about business data
-// still flowing, so a watchdog that accepts heartbeats as liveness cannot
-// detect a silent venue. Drill 09 builds on this hook.
-func (c *Client) OnInbound(fn func(quickfix.SessionID)) {
+// OnInbound registers a callback fired on every inbound message, with the class
+// of traffic it was. The watchdog subscribes here and counts only InboundApp —
+// see InboundClass for why that distinction is the entire drill 09 lesson.
+func (c *Client) OnInbound(fn func(quickfix.SessionID, InboundClass)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.onInbound = append(c.onInbound, fn)
 }
 
-// NoteInbound records that a message arrived on a session and fires the
-// OnInbound callbacks. Client calls it for admin traffic; an embedding
-// application calls it from its own FromApp for application traffic.
-func (c *Client) NoteInbound(sessionID quickfix.SessionID) {
+// NoteInbound records that a message arrived and fires the OnInbound callbacks.
+// Client calls it for admin traffic; an embedding application calls it from its
+// own FromApp with InboundApp.
+func (c *Client) NoteInbound(sessionID quickfix.SessionID, class InboundClass) {
 	c.mu.RLock()
 	fns := c.onInbound
 	c.mu.RUnlock()
 
 	for _, fn := range fns {
-		fn(sessionID)
+		fn(sessionID, class)
 	}
 }
 
@@ -102,6 +123,6 @@ func (c *Client) ToAdmin(msg *quickfix.Message, sessionID quickfix.SessionID) {
 func (c *Client) ToApp(msg *quickfix.Message, sessionID quickfix.SessionID) error { return nil }
 
 func (c *Client) FromAdmin(msg *quickfix.Message, sessionID quickfix.SessionID) quickfix.MessageRejectError {
-	c.NoteInbound(sessionID)
+	c.NoteInbound(sessionID, InboundAdmin)
 	return nil
 }
