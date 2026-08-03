@@ -131,7 +131,9 @@ documentation quietly going stale.
 
 ## Notes on quickfixgo
 
-Things worth knowing before you build on it, all verified against v0.9.10:
+Things worth knowing before you build on it, all verified against v0.9.10.
+Longer, symptom-first versions of each — with the source quoted and the tests
+that prove them — are in **[docs/field-notes.md](docs/field-notes.md)**.
 
 - **There is no per-session disconnect.** The `session` type is unexported.
   `registry.go` gives you `Send`, `SendToTarget`, `ResetSession`,
