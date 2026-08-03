@@ -90,6 +90,40 @@ was lost. Two real bugs in one message: the dictionary needed the value, and the
 drop-copy session should never have replied at all. Venues do emit values their
 own published specs omit, so plan for it.
 
+## Never reject a reject
+
+The rule that outranks everything else here, and the one this repo learned the
+expensive way.
+
+If your application answers unknown message types with a reject, and the
+counterparty does the same, then the first `35=j` either side sends never stops.
+You reject the rejection, they reject that, and the two of you ping-pong at wire
+speed. The first version of this lab did exactly that: a single duplicate
+`ClOrdID` after a client restart produced **thirteen thousand messages in six
+seconds**, burned the sequence numbers on both sides, and left two stores full
+of nothing but rejections.
+
+```go
+switch msgType {
+case msgTypeExecutionReport:
+    return c.onExecutionReport(...)
+case msgTypeBusinessReject:
+    c.Log.Printf("business reject from the venue: %s", rejectText(msg))
+    return nil          // log it, never answer it
+default:
+    return quickfix.NewBusinessMessageRejectError(...)
+}
+```
+
+Both sides need the fix. Repairing one end shortens the loop by a message and
+leaves it running.
+
+It is worth being precise about why the unit tests missed this. They call
+`FromApp` directly with a hand-built message and assert on what comes back —
+which verifies what one side *answers* and, by construction, cannot observe what
+happens when the other side answers back. The loop needs two real applications
+on a real socket. `internal/drills/reject_storm_test.go` is that test now.
+
 ## Versus real venues
 
 - A venue that receives a Reject it did not expect may escalate — repeated

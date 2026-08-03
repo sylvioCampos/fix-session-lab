@@ -13,6 +13,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -81,7 +82,9 @@ func run(o options, logger *log.Logger) error {
 	if err != nil {
 		return err
 	}
-	session.OverrideConnectHost(settings, o.host)
+	if err := session.OverrideConnectHost(settings, o.host); err != nil {
+		return err
+	}
 
 	sessionID, err := session.SoleSession(settings)
 	if err != nil {
@@ -90,6 +93,18 @@ func run(o options, logger *log.Logger) error {
 
 	storeFactory := filestore.NewStoreFactory(settings)
 	logFactory := fixlog.NewFactory(os.Stdout)
+
+	// Base-36 nanoseconds-since-epoch, so two runs never share a prefix.
+	//
+	// Minute or second granularity is not enough: `docker compose restart`
+	// brings the process back in well under a second, the prefix repeats, the
+	// in-memory counter starts again at 1, and every order collides with one
+	// the venue already has. That is not hypothetical — it is what the first
+	// version of this did.
+	//
+	// A production client would draw from a persisted sequence rather than the
+	// clock, so its IDs stay meaningful and auditable across a restart.
+	clOrdIDPrefix := strconv.FormatInt(time.Now().UnixNano(), 36)
 
 	// The application is replaced on every reconnect — a client that restarts
 	// loses its in-memory order state and rebuilds it from what the venue
@@ -104,6 +119,12 @@ func run(o options, logger *log.Logger) error {
 			CODType:          o.codType,
 			CODTimeoutWindow: o.codWindow,
 		}, logger)
+
+		// ClOrdID must not collide with orders a previous run of this process
+		// already placed — the venue remembers them and rejects duplicates.
+		// A per-process prefix is the cheapest thing that survives a restart;
+		// a real client would draw from a persistent sequence.
+		next.SetClOrdIDPrefix(clOrdIDPrefix)
 
 		if watchdog != nil {
 			session.WatchClient(next.Client, watchdog)

@@ -24,14 +24,54 @@ import (
 // tagPossDupFlag marks a message as a replay of one already sent.
 const tagPossDupFlag quickfix.Tag = 43
 
+const (
+	msgTypeExecutionReport = "8"
+	msgTypeBusinessReject  = "j"
+)
+
+// rejectText pulls the human-readable reason off a reject, for logging.
+func rejectText(msg *quickfix.Message) string {
+	if s, err := msg.Body.GetString(quickfix.Tag(58)); err == nil {
+		return s
+	}
+	return "(no Text)"
+}
+
 // OrderEntry is the order-entry client application.
 type OrderEntry struct {
 	*session.Client
+
+	// prefix disambiguates ClOrdIDs between runs of this client.
+	//
+	// ClOrdID must be unique for the life of the venue's order book, not just
+	// for the life of your process. The counter below lives in memory, so a
+	// restart begins again at 1 while the venue still remembers the orders the
+	// previous run sent — and answers the collision with a business reject.
+	//
+	// Tests leave this empty so their wire traces stay deterministic. The
+	// shipped binary sets it per process; see cmd/oe-client.
+	prefix string
 
 	mu      sync.Mutex
 	seq     int
 	orders  map[string]OrderView
 	replays int
+}
+
+// SetClOrdIDPrefix disambiguates this client's ClOrdIDs from those of previous
+// runs. Call it before sending anything.
+func (c *OrderEntry) SetClOrdIDPrefix(p string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.prefix = p
+}
+
+// ResetClOrdIDSeq rewinds the ClOrdID counter, simulating a restarted process.
+// It exists for the regression test that reproduces a duplicate-ClOrdID reject.
+func (c *OrderEntry) ResetClOrdIDSeq() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.seq = 0
 }
 
 // OrderView is the client's own record of an order, built entirely from the
@@ -65,12 +105,32 @@ func (c *OrderEntry) FromApp(msg *quickfix.Message, sessionID quickfix.SessionID
 	if err != nil {
 		return err
 	}
-	if msgType != "8" {
+
+	switch msgType {
+	case msgTypeExecutionReport:
+		return c.onExecutionReport(executionreport.FromMessage(msg))
+
+	case msgTypeBusinessReject:
+		// Never reject a reject.
+		//
+		// A BusinessMessageReject is not something to answer. Rejecting it
+		// produces another reject, which the counterparty rejects in turn, and
+		// the two sides ping-pong at wire speed until something falls over. The
+		// first version of this client rejected everything that was not an
+		// ExecutionReport, `35=j` included, and burned thirteen thousand
+		// sequence numbers in six seconds the first time a venue refused an
+		// order.
+		//
+		// The unit tests could not catch it: they call FromApp directly with a
+		// hand-built message, so there was no counterparty to answer back. It
+		// took two real applications on a real socket.
+		c.Log.Printf("business reject from the venue: %s", rejectText(msg))
+		return nil
+
+	default:
 		return quickfix.NewBusinessMessageRejectError(
 			fmt.Sprintf("unsupported message type %q", msgType), 3, nil)
 	}
-
-	return c.onExecutionReport(executionreport.FromMessage(msg))
 }
 
 func (c *OrderEntry) onExecutionReport(er executionreport.ExecutionReport) quickfix.MessageRejectError {
@@ -153,7 +213,7 @@ type NewOrder struct {
 func (c *OrderEntry) Send(sessionID quickfix.SessionID, o NewOrder) (string, error) {
 	c.mu.Lock()
 	c.seq++
-	clOrdID := fmt.Sprintf("CL%06d", c.seq)
+	clOrdID := fmt.Sprintf("CL%s%06d", c.prefix, c.seq)
 	c.mu.Unlock()
 
 	msg := newordersingle.New(

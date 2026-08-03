@@ -142,6 +142,18 @@ Things worth knowing before you build on it, all verified against v0.9.10:
   do not let one missing field suppress the rest of the Logon, or you will
   silently fail to arm cancel-on-disconnect too.
 
+- **`Settings.SessionSettings()` returns clones, not the live settings.** It
+  rebuilds a copy from `globalSettings` on every call, so mutating what it hands
+  back changes nothing — `NewInitiator` calls it again and gets clean copies.
+  Write to `GlobalSettings()`, which is live. This cost a silent no-op that only
+  showed up under docker-compose; see `OverrideConnectHost`.
+
+- **Never reject a reject.** If your `FromApp` answers unknown message types
+  with a `BusinessMessageReject`, and the counterparty does the same, then the
+  first `35=j` either side sends loops forever — both reject the rejection, at
+  wire speed. Thirteen thousand messages in six seconds, the first time it
+  happened here. Handle `35=j` and `35=3` explicitly and return nil.
+
 - **Rejects split in a place you would not guess.** An out-of-range tag value on
   an application message produces a session Reject (`35=3`); a *missing
   conditionally-required field* on the same message produces a Business Message

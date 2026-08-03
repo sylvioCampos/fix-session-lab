@@ -278,10 +278,28 @@ func (a *App) FromApp(msg *quickfix.Message, sessionID quickfix.SessionID) quick
 	switch msgType {
 	case "D":
 		return a.onNewOrderSingle(msg, sessionID)
+
+	case "j", "3":
+		// Never reject a reject. See the matching comment in
+		// internal/client/oe.go — when both sides reject what they do not
+		// recognise, and neither recognises a reject, they ping-pong at wire
+		// speed until something falls over. Both halves have to be fixed;
+		// fixing only one leaves the loop one message longer.
+		a.log.Printf("reject from %s: %s", sessionID, rejectText(msg))
+		return nil
+
 	default:
 		return quickfix.NewBusinessMessageRejectError(
 			fmt.Sprintf("unsupported message type %q", msgType), 3, nil)
 	}
+}
+
+// rejectText pulls the human-readable reason off a reject, for logging.
+func rejectText(msg *quickfix.Message) string {
+	if s, err := msg.Body.GetString(quickfix.Tag(58)); err == nil {
+		return s
+	}
+	return "(no Text)"
 }
 
 func (a *App) checkPassword(sessionID quickfix.SessionID, got string) error {

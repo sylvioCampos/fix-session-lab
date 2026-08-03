@@ -42,7 +42,9 @@ func run(cfgPath, host string, logger *log.Logger) error {
 	if err != nil {
 		return err
 	}
-	session.OverrideConnectHost(settings, host)
+	if err := session.OverrideConnectHost(settings, host); err != nil {
+		return err
+	}
 
 	// Cancel-on-disconnect is not armed on a drop-copy session: it owns no
 	// orders. Arming it here would do nothing on a correct venue and would be
