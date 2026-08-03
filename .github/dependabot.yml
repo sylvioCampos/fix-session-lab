@@ -1,0 +1,31 @@
+# Weekly bumps. The lab pins quickfixgo deliberately, so the value here is not
+# staying on the newest version — it is finding out when a newer one breaks
+# something. Several behaviours the drills rely on are internal to quickfixgo
+# and not covered by any API promise; CI on the resulting PR is the tripwire.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: "docker"

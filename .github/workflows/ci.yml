@@ -4,16 +4,29 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Weekly, so a breaking change in a dependency surfaces without waiting for
+  # someone to push. A public boilerplate that no longer compiles is worse than
+  # no boilerplate.
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: '1.24'
 
 jobs:
   test:
+    name: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
-          go-version: '1.24'
+          go-version: ${{ env.GO_VERSION }}
           cache: true
 
       - name: Verify formatting
@@ -29,12 +42,144 @@ jobs:
 
       # The drills are the product. If they stop passing, the documentation in
       # docs/drills is describing something the code no longer does.
+      #
+      # -coverpkg=./... matters: the drills live in their own package and
+      # exercise everything else over a socket, so per-package coverage reports
+      # almost nothing. Without it the number reads ~0% and means ~nothing.
       - name: Run drills
-        run: go test -race ./...
+        run: go test -race -coverpkg=./... -coverprofile=coverage.out -covermode=atomic ./...
+
+      - name: Coverage summary
+        run: |
+          go tool cover -func=coverage.out | tail -1
+          pct=$(go tool cover -func=coverage.out | tail -1 | grep -Eo '[0-9]+\.[0-9]+')
+          echo "### Coverage: ${pct}%" >> "$GITHUB_STEP_SUMMARY"
+          echo "COVERAGE_PCT=$pct" >> "$GITHUB_ENV"
+
+      - name: Upload coverage profile
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.out
 
   compose:
+    name: compose stack
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Build the stack
+      - uses: actions/checkout@v5
+
+      - name: Build the images
         run: docker compose build
+
+      # Building the image only proves it compiles. Everything below is the
+      # part that was never verified until issue #1: that the three services
+      # actually talk to each other, that -host resolves inside the compose
+      # network, and — the one that would fail silently — that the store volume
+      # really persists across a restart. Drills 06 and 07 are worthless if it
+      # does not.
+      - name: Start the stack
+        run: docker compose up -d
+
+      - name: Wait for both sessions to log on
+        run: |
+          for i in $(seq 1 60); do
+            n=$(curl -sf localhost:8081/admin/sessions \
+                | python3 -c 'import sys,json;print(sum(1 for s in json.load(sys.stdin) if s["logged_on"]))' \
+                2>/dev/null || echo 0)
+            if [ "$n" = "2" ]; then
+              echo "both sessions logged on after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::sessions did not log on within 60s"
+          docker compose logs
+          exit 1
+
+      - name: Order round trip reaches the drop copy
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do
+            n=$(curl -sf localhost:8081/admin/orders | python3 -c 'import sys,json;print(len(json.load(sys.stdin)))')
+            [ "$n" -ge 1 ] && break
+            sleep 1
+          done
+          clordid=$(curl -sf localhost:8081/admin/orders \
+                    | python3 -c 'import sys,json;print(json.load(sys.stdin)[0]["ClOrdID"])')
+          echo "filling $clordid"
+          curl -sf -XPOST "localhost:8081/admin/fill?clordid=${clordid}&px=25.50"
+          sleep 2
+          if ! docker compose logs dc-client | grep -q "execType=F"; then
+            echo "::error::the fill never reached the drop-copy session"
+            docker compose logs dc-client
+            exit 1
+          fi
+
+      - name: The password never reaches a log
+        run: |
+          set -euo pipefail
+          if docker compose logs | grep -qE '96=(oe-secret|dc-secret)'; then
+            echo "::error::a session password appeared in the logs unmasked"
+            exit 1
+          fi
+          docker compose logs | grep -q '96=\*\*\*\*' || {
+            echo "::error::no masked RawData found; the redacting log factory is not in use"
+            exit 1
+          }
+
+      - name: The drop-copy session never sends a reject
+        run: |
+          set -euo pipefail
+          count=$(docker compose logs dc-client | grep -c '35=3' || true)
+          if [ "$count" != "0" ]; then
+            echo "::error::the drop-copy session emitted ${count} reject(s); it must be read-only"
+            docker compose logs dc-client | grep '35=3' | head
+            exit 1
+          fi
+
+      # The assertion this whole job exists for. A store that does not survive
+      # a restart makes the gap-recovery drill demonstrate nothing, and it would
+      # fail silently — everything reconnects and looks healthy.
+      - name: Sequence numbers survive a restart
+        run: |
+          set -euo pipefail
+          seqnum() {
+            curl -sf localhost:8081/admin/sessions \
+              | python3 -c 'import sys,json;print([s["seqnums"]["last_received"] for s in json.load(sys.stdin) if s["kind"]=="ORDER_ENTRY"][0])'
+          }
+          before=$(seqnum)
+          echo "before restart: $before"
+
+          docker compose restart oe-client
+          for i in $(seq 1 60); do
+            n=$(curl -sf localhost:8081/admin/sessions \
+                | python3 -c 'import sys,json;print(sum(1 for s in json.load(sys.stdin) if s["kind"]=="ORDER_ENTRY" and s["logged_on"]))' \
+                2>/dev/null || echo 0)
+            [ "$n" = "1" ] && break
+            sleep 1
+          done
+
+          after=$(seqnum)
+          echo "after restart:  $after"
+          if [ "$after" -le "$before" ]; then
+            echo "::error::sequence went $before -> $after; the store did not survive the restart"
+            docker compose logs oe-client | tail -40
+            exit 1
+          fi
+
+      # A restarted client must not reissue ClOrdIDs the venue already holds.
+      # When it did, the duplicate rejection triggered a reject storm.
+      - name: A restart does not collide with previous ClOrdIDs
+        run: |
+          set -euo pipefail
+          sleep 12
+          rejects=$(docker compose logs oe-client | grep -c '35=j' || true)
+          if [ "$rejects" != "0" ]; then
+            echo "::error::${rejects} business reject(s) after restart — duplicate ClOrdIDs are back"
+            docker compose logs oe-client | grep '35=j' | head
+            exit 1
+          fi
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
