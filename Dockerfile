@@ -10,7 +10,7 @@ RUN go build -o /out/exchange  ./cmd/exchange \
  && go build -o /out/oe-client ./cmd/oe-client \
  && go build -o /out/dc-client ./cmd/dc-client
 
-FROM alpine:3.20
+FROM alpine:3.24
 
 WORKDIR /app
 COPY --from=build /out/ /usr/local/bin/
