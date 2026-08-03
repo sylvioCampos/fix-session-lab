@@ -1,5 +1,12 @@
 # fix-session-lab
 
+[![ci](https://github.com/sylvioCampos/fix-session-lab/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/sylvioCampos/fix-session-lab/actions/workflows/ci.yml)
+[![coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FsylvioCampos%2Ffix-session-lab%2Fbadges%2Fcoverage.json)](https://github.com/sylvioCampos/fix-session-lab/actions/workflows/coverage-badge.yml)
+[![go version](https://img.shields.io/github/go-mod/go-version/sylvioCampos/fix-session-lab)](go.mod)
+[![release](https://img.shields.io/github/v/release/sylvioCampos/fix-session-lab?sort=semver)](https://github.com/sylvioCampos/fix-session-lab/releases)
+[![quickfixgo](https://img.shields.io/badge/quickfixgo-v0.9.10-00ADD8)](https://github.com/quickfixgo/quickfix)
+[![license](https://img.shields.io/github/license/sylvioCampos/fix-session-lab)](LICENSE)
+
 A working FIX 4.4 session boilerplate in Go, built around a fake exchange you
 can command.
 
@@ -104,6 +111,11 @@ asserts.
 go test ./...                 # every drill
 go test ./... -update         # rewrite the golden wire traces
 FIXLAB_DUMP_WIRE=1 go test ./... -v -run TestDrill07   # print a full trace
+
+# Real coverage. -coverpkg is not optional here: the drills live in their own
+# package and drive everything else over a socket, so per-package measurement
+# reports close to zero and tells you nothing.
+go test -coverpkg=./... -coverprofile=coverage.out ./... && go tool cover -func=coverage.out | tail -1
 ```
 
 Each drill has an integration test that stands up a real acceptor, real

@@ -1,0 +1,87 @@
+# Publishes a coverage badge without depending on a third-party service.
+#
+# The workflow measures coverage on main, writes a shields.io endpoint document,
+# and commits it to an orphan `badges` branch. shields.io reads that file raw
+# from GitHub. No account to link, no token to keep alive, nothing to expire.
+#
+# It runs only on main: a badge that tracked pull requests would flip on every
+# push from a fork and mean nothing.
+name: coverage badge
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: coverage-badge
+  cancel-in-progress: true
+
+jobs:
+  badge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.24'
+          cache: true
+
+      # -coverpkg=./... is required, not optional. The drills live in their own
+      # package and exercise everything else over a socket, so the default
+      # per-package measurement reports close to zero and would publish a badge
+      # that actively misinforms.
+      - name: Measure coverage
+        id: cov
+        run: |
+          go test -coverpkg=./... -coverprofile=coverage.out -covermode=atomic ./...
+          pct=$(go tool cover -func=coverage.out | tail -1 | grep -Eo '[0-9]+\.[0-9]+')
+          echo "pct=$pct" >> "$GITHUB_OUTPUT"
+          echo "coverage: ${pct}%"
+
+      - name: Build the badge document
+        run: |
+          pct='${{ steps.cov.outputs.pct }}'
+          whole=${pct%.*}
+          if   [ "$whole" -ge 80 ]; then colour=brightgreen
+          elif [ "$whole" -ge 60 ]; then colour=green
+          elif [ "$whole" -ge 40 ]; then colour=yellow
+          elif [ "$whole" -ge 20 ]; then colour=orange
+          else                           colour=red
+          fi
+          mkdir -p out
+          cat > out/coverage.json <<EOF
+          {
+            "schemaVersion": 1,
+            "label": "coverage",
+            "message": "${pct}%",
+            "color": "${colour}"
+          }
+          EOF
+          cat out/coverage.json
+
+      - name: Publish to the badges branch
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # An orphan branch: badge data has no relationship to the source
+          # history and should not clutter it.
+          git checkout --orphan badges
+          git rm -rf --cached . >/dev/null 2>&1 || true
+          find . -maxdepth 1 -mindepth 1 ! -name .git ! -name out -exec rm -rf {} +
+          mv out/coverage.json ./coverage.json
+          rmdir out
+
+          git add coverage.json
+          if git diff --cached --quiet; then
+            echo "coverage unchanged; nothing to publish"
+            exit 0
+          fi
+          git commit -m "coverage: ${{ steps.cov.outputs.pct }}%"
+          git push --force origin badges
