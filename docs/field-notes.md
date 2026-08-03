@@ -204,7 +204,7 @@ merits.
 
 ## 6. "`-race` is flagging quickfixgo's message store"
 
-It is right to. The stores carry no synchronisation whatsoever:
+It is right to. The stores carry no synchronization whatsoever:
 
 ```go
 // quickfix/memory_store.go

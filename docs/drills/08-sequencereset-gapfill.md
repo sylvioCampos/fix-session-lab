@@ -70,7 +70,7 @@ so it is flagged as a possible duplicate even though the receiver has certainly
 never seen it.
 
 > A client that treats `43=Y` as "already handled this, ignore it" will ignore
-> the very message telling it where to resume, and then never resynchronise. The
+> the very message telling it where to resume, and then never resynchronize. The
 > flag means "you may have seen this before" — it does not mean "safe to
 > discard".
 
@@ -85,7 +85,7 @@ the pure one.
 - A venue may chunk a large resend into several ranges, each with its own gap
   fills, when the request exceeds its limit — B3 rejects anything over 10,000
   messages.
-- Some venues send `SequenceReset` with `GapFillFlag=N` to force resynchronisation
+- Some venues send `SequenceReset` with `GapFillFlag=N` to force resynchronization
   after an operational problem. That is not recovery; it is an instruction to
   abandon the gap, and whatever was in it is gone.
 - Real ranges mix replayed application messages and gap fills freely. Do not
