@@ -53,9 +53,15 @@ func TestDrill09_WatchdogFiresOnApplicationSilence(t *testing.T) {
 
 	// It recovered by building a new Initiator, which is the only way
 	// quickfixgo permits a single session to be recycled.
-	if got := lab.OESupervisorStarts(); got < 2 {
-		t.Errorf("supervisor built %d initiator(s); a forced reconnect must build a new one", got)
-	}
+	//
+	// Waited for, not asserted outright: the watchdog increments its fired
+	// counter before it calls Restart, so the condition above can be true while
+	// the rebuild is still in flight. Reading Starts() immediately is a race —
+	// it passed locally a dozen times and on the pull request, then failed on
+	// main.
+	waitFor(t, 5*time.Second, "the supervisor to build a replacement initiator", func() bool {
+		return lab.OESupervisorStarts() >= 2
+	})
 
 	// And the session comes back up on its own afterwards.
 	lab.Exchange.SetSilenced(false)

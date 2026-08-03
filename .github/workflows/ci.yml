@@ -109,31 +109,40 @@ jobs:
           echo "filling $clordid"
           curl -sf -XPOST "localhost:8081/admin/fill?clordid=${clordid}&px=25.50"
           sleep 2
-          if ! docker compose logs dc-client | grep -q "execType=F"; then
+          # Logs go to a file before being searched. `docker compose logs | grep -q`
+          # looks obvious and is a trap: grep exits on the first match, docker
+          # takes SIGPIPE and returns 141, and `set -o pipefail` reports the
+          # pipeline as failed even though the match was found. It fails only
+          # when the log is long enough for docker to still be writing — which
+          # is to say, intermittently.
+          docker compose logs dc-client > dc.log
+          if ! grep -q "execType=F" dc.log; then
             echo "::error::the fill never reached the drop-copy session"
-            docker compose logs dc-client
+            cat dc.log
             exit 1
           fi
 
       - name: The password never reaches a log
         run: |
           set -euo pipefail
-          if docker compose logs | grep -qE '96=(oe-secret|dc-secret)'; then
+          docker compose logs > all.log
+          if grep -qE '96=(oe-secret|dc-secret)' all.log; then
             echo "::error::a session password appeared in the logs unmasked"
             exit 1
           fi
-          docker compose logs | grep -q '96=\*\*\*\*' || {
+          if ! grep -q '96=\*\*\*\*' all.log; then
             echo "::error::no masked RawData found; the redacting log factory is not in use"
             exit 1
-          }
+          fi
 
       - name: The drop-copy session never sends a reject
         run: |
           set -euo pipefail
-          count=$(docker compose logs dc-client | grep -c '35=3' || true)
+          docker compose logs dc-client > dc.log
+          count=$(grep -c '35=3' dc.log || true)
           if [ "$count" != "0" ]; then
             echo "::error::the drop-copy session emitted ${count} reject(s); it must be read-only"
-            docker compose logs dc-client | grep '35=3' | head
+            grep -m 20 '35=3' dc.log || true
             exit 1
           fi
 
@@ -163,7 +172,7 @@ jobs:
           echo "after restart:  $after"
           if [ "$after" -le "$before" ]; then
             echo "::error::sequence went $before -> $after; the store did not survive the restart"
-            docker compose logs oe-client | tail -40
+            docker compose logs oe-client > oe.log && tail -40 oe.log
             exit 1
           fi
 
@@ -173,10 +182,11 @@ jobs:
         run: |
           set -euo pipefail
           sleep 12
-          rejects=$(docker compose logs oe-client | grep -c '35=j' || true)
+          docker compose logs oe-client > oe.log
+          rejects=$(grep -c '35=j' oe.log || true)
           if [ "$rejects" != "0" ]; then
             echo "::error::${rejects} business reject(s) after restart — duplicate ClOrdIDs are back"
-            docker compose logs oe-client | grep '35=j' | head
+            grep -m 20 '35=j' oe.log || true
             exit 1
           fi
 
