@@ -6,7 +6,7 @@ require (
 	github.com/quickfixgo/enum v0.1.0
 	github.com/quickfixgo/field v0.1.0
 	github.com/quickfixgo/fix44 v0.1.0
-	github.com/quickfixgo/quickfix v0.9.10
+	github.com/quickfixgo/quickfix v0.9.11
 	github.com/quickfixgo/tag v0.1.0
 	github.com/shopspring/decimal v1.4.0
 )
