@@ -14,8 +14,8 @@ github.com/quickfixgo/field v0.1.0 h1:JVO6fVD6Nkyy8e/ROYQtV/nQhMX/BStD5Lq7XIgYz2
 github.com/quickfixgo/field v0.1.0/go.mod h1:Zu0qYmpj+gljlB2HgpUt9EcTIThs2lIQb8C57qbJr8o=
 github.com/quickfixgo/fix44 v0.1.0 h1:g/rTl6mXDlG7iIMbY7zaPbHcj9N/B+tteOZ01yGzeSQ=
 github.com/quickfixgo/fix44 v0.1.0/go.mod h1:d6Ia02Eq/JYgKCn/2V9FHxguAl1Alp/yu/xVpry82dA=
-github.com/quickfixgo/quickfix v0.9.10 h1:j3OIIVaE9L9x7LwgbABE/FQSrMAXtHaqpRo3IAIRfKw=
-github.com/quickfixgo/quickfix v0.9.10/go.mod h1:LpvubslWDsNapeQDvhYS2Qty9gJtm2vr/gSdUcpdEwU=
+github.com/quickfixgo/quickfix v0.9.12 h1:+zunSzScKBBHVbBV/qbe7WdGA3pkwYCebNw3EaUQnpg=
+github.com/quickfixgo/quickfix v0.9.12/go.mod h1:LpvubslWDsNapeQDvhYS2Qty9gJtm2vr/gSdUcpdEwU=
 github.com/quickfixgo/tag v0.1.0 h1:R2A1Zf7CBE903+mOQlmTlfTmNZQz/yh7HunMbgcsqsA=
 github.com/quickfixgo/tag v0.1.0/go.mod h1:l/drB1eO3PwN9JQTDC9Vt2EqOcaXk3kGJ+eeCQljvAI=
 github.com/shopspring/decimal v1.4.0 h1:bxl37RwXBklmTi0C79JfXCEBD1cqqHt0bbgBAGFp81k=
